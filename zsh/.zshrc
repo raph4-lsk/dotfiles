@@ -1,3 +1,10 @@
+# ─── NIX ────────────────────────────────────────────────────
+# Sourced here rather than relying on /etc/zshrc: macOS updates overwrite
+# that file and drop the block the Nix installer added.
+if [ -e /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh ]; then
+  . /nix/var/nix/profiles/default/etc/profile.d/nix-daemon.sh
+fi
+# test
 # ─── HOMEBREW ───────────────────────────────────────────────
 eval "$(/opt/homebrew/bin/brew shellenv zsh)"
 export HOMEBREW_CASK_OPTS="--appdir=$HOME/Applications"
