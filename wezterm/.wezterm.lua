@@ -26,6 +26,8 @@ config.send_composed_key_when_left_alt_is_pressed = false
 config.send_composed_key_when_right_alt_is_pressed = false
 
 -- ─── PANES: split + navigation ──────────────────────────────
+local NVIM_CMD_R = '\x1b[114;9u'
+
 config.keys = {
   -- Split the current pane
   { key = 'd', mods = 'CMD',       action = act.SplitHorizontal { domain = 'CurrentPaneDomain' } }, -- left | right
@@ -53,6 +55,11 @@ config.keys = {
   { key = 'u',          mods = 'CMD',       action = act.SendString '\x1f' },
   { key = 'u',          mods = 'CMD|SHIFT', action = act.SendString '\x1bU' },
   { key = 'f',          mods = 'CTRL|CMD',  action = act.ToggleFullScreen },
+
+  { key = 'r', mods = 'CMD', action = wezterm.action_callback(function(window, pane)
+    local in_nvim = (pane:get_foreground_process_name() or ''):find('nvim')
+    window:perform_action(in_nvim and act.SendString(NVIM_CMD_R) or act.ReloadConfiguration, pane)
+  end) },
 }
 
 config.colors = {
