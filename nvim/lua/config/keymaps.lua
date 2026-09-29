@@ -22,6 +22,11 @@ vim.keymap.set("v", "<leader>p", '"_dP', { desc = "Paste without losing the yank
 pcall(vim.keymap.del, "n", "<leader>qq")
 vim.keymap.set("n", "<leader>q", "<cmd>qa<cr>", { desc = "Quit all" })
 
+vim.keymap.set("n", "q", function()
+  return vim.fn.reg_recording() ~= "" and "q" or "<cmd>qa<cr>"
+end, { expr = true, desc = "Quit all" })
+vim.keymap.set("n", "<leader>m", "q", { desc = "Record macro" })
+
 -- Close the buffer with a single Q. Buffers are walked with H and L, so closing
 -- one belongs on the same shift+letter row. Q's default is Ex mode, never used,
 -- and autocmds.lua auto-saves, so a stray press costs nothing. <leader>bd still
