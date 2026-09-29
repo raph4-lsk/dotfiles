@@ -23,6 +23,9 @@ customCommands:
     command: 'git commit -m {{ printf "%s: %s" .Form.Type .Form.Message | quote }}'
     loadingText: "committing"
 
+services:
+  github-perso: github:github.com
+
 git:
   pagers:
     - pager: delta --dark --paging=never
