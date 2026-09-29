@@ -1,11 +1,21 @@
 return {
-  -- Explorateur de fichiers : on garde celui de snacks (defaut LazyVim), neo-tree desactive
   { "nvim-neo-tree/neo-tree.nvim", enabled = false },
   {
     "folke/snacks.nvim",
     opts = {
       dashboard = { enabled = false },
-      explorer = { replace_netrw = false},
+      lazygit = {
+        theme = {
+          activeBorderColor = { fg = "Function", bold = true },
+          searchingActiveBorderColor = { fg = "Function", bold = true },
+        },
+        win = {
+          on_buf = function(self)
+            vim.b[self.buf].terminal_color_2 = "#7aa2f7"
+            vim.b[self.buf].terminal_color_10 = "#7aa2f7"
+          end,
+        },
+      },
       picker = {
         sources = {
           explorer = {
@@ -24,40 +34,29 @@ return {
       {
         "<leader>e",
         function()
+          local explorer = Snacks.picker.get({ source = "explorer" })[1]
+          if explorer and not explorer.closed then
+            explorer:close()
+            return
+          end
+
           local root = vim.fs.normalize(vim.fn.getcwd())
           local file = vim.fs.normalize(vim.api.nvim_buf_get_name(0))
           local in_root = file:find(root .. "/", 1, true) == 1
-          local explorer = Snacks.picker.get({ source = "explorer" })[1]
-
-          if explorer and not explorer.closed then
-            if explorer:is_focused() then
-              explorer:close()
-              return
-            end
-            if explorer:cwd() ~= root then
-              explorer:set_cwd(root)
-            end
-            if in_root then
-              Snacks.explorer.reveal()
-            end
-              explorer:focus()
-          else
-            Snacks.explorer.open({
-              cwd = root,
-              on_show = function ()
-                if in_root then
-                  vim.schedule(function()
-                    Snacks.explorer.reveal()
-                  end)
-                end
+          Snacks.explorer.open({
+            cwd = root,
+            on_show = function()
+              if in_root then
+                vim.schedule(function()
+                  Snacks.explorer.reveal()
+                end)
               end
-           })
-          end
+            end,
+          })
         end,
-        desc = "Explorer (focus, and close if open)",
+        desc = "Explorer (toggle)",
       },
     },
   },
-  -- Indentation visuelle
   { "lukas-reineke/indent-blankline.nvim", main = "ibl", opts = {} },
 }

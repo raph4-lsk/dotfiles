@@ -50,7 +50,7 @@ fi
 # exact mirror: a skill removed or renamed here disappears locally too
 mkdir -p ~/.claude/skills
 rsync -a --delete ~/raph_config/claude/skills/ ~/.claude/skills/
-echo "✅ Claude Code skills ($(ls -1 ~/.claude/skills | tr '\n' ' '))"
+echo "✅ Claude Code skills"
 
 # statusline: the "statusLine" entry in ~/.claude/settings.json is not synced
 cp ~/raph_config/claude/statusline.sh ~/.claude/statusline.sh
