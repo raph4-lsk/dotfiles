@@ -38,13 +38,19 @@ WORDCHARS=''
 # ─── BASIC ALIASES ──────────────────────────────────────────
 alias e='nvim'
 alias g='git'
-alias lg='lazygit'
 alias cl='clear'
 alias py='python3.12'
 alias python3='python3.12'
 alias reload='source ~/.zshrc && echo "✅ Shell reloaded"'
 alias back='cd -'
 alias cce='set -a && source .env && claude'
+
+function lg {
+  local paint_green_blue=$'\e]4;2;#7aa2f7\a\e]4;10;#7aa2f7\a'
+  local restore_green=$'\e]104;2;10\a'
+  printf '%s' "$paint_green_blue"
+  { lazygit "$@" } always { printf '%s' "$restore_green" }
+}
 
 # ─── 📝 CONFIG FILE SHORTCUTS ───────────────────────────────
 # sourced, not executed: run as a script, sync.sh reloads its own subshell and
