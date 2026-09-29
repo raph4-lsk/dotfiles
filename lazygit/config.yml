@@ -22,3 +22,20 @@ customCommands:
         title: "Message"
     command: 'git commit -m {{ printf "%s: %s" .Form.Type .Form.Message | quote }}'
     loadingText: "committing"
+
+git:
+  pagers:
+    - pager: delta --dark --paging=never
+
+gui:
+  theme:
+    activeBorderColor:
+      - "#7aa2f7"
+      - bold
+    searchingActiveBorderColor:
+      - "#7aa2f7"
+      - bold
+    selectedLineBgColor:
+      - "#283457"
+    inactiveViewSelectedLineBgColor:
+      - "#292e42"
