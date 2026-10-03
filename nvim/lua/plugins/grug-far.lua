@@ -13,7 +13,6 @@ return {
   "MagicDuck/grug-far.nvim",
   keys = {
     { "<leader>sr", open, mode = { "n", "x" }, desc = "Search and Replace" },
-    { "<D-r>", open, mode = { "n", "x", "i" }, desc = "Search and Replace" },
   },
   opts = {
     windowCreationCommand = "topleft 70vsplit",
