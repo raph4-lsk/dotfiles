@@ -1,0 +1,44 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+
+  "model": "openrouter/deepseek/deepseek-v4.1-flash",
+
+  "autoupdate": true,
+
+  "instructions": [
+    "~/.config/opencode/AGENTS.md"
+  ],
+
+  "permissions": [
+    {
+      "action": "shell",
+      "resource": "git merge *",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "gh pr merge *",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "git push origin main *",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "git push origin master *",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "git push origin integration *",
+      "effect": "deny"
+    },
+    {
+      "action": "shell",
+      "resource": "git push origin develop *",
+      "effect": "deny"
+    }
+  ]
+}
