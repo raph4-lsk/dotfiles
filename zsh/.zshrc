@@ -375,3 +375,12 @@ alias fz='open /Applications/FileZilla.app'
 alias db='open /Applications/DBeaver.app'
 alias cc='claude'
 alias mcpcc='set -a && source .env && claude --strict-mcp-config --mcp-config .mcp.json'
+
+# ─── OPENCODE / OPENROUTER ─────────────────────────────────
+if [ -f "$HOME/.config/opencode/.env" ]; then
+    set -a
+    source "$HOME/.config/opencode/.env"
+    set +a
+fi
+
+alias oc='opencode2'
