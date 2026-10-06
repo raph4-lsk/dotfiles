@@ -1,0 +1,7 @@
+{
+  "Docstring": {
+    "prefix": "dc",
+    "body": ["\"\"\"", "$0", "\"\"\""],
+    "description": "Three-line docstring"
+  }
+}
