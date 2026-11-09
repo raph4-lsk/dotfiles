@@ -84,4 +84,18 @@ wezterm.on('window-focus-changed', function(window)
   end
 end)
 
+-- ─── CLAUDE CODE: Agents link ───────────────────────────────
+-- The statusline links "Agents" to claude-agents://<session_id>:
+-- open the live sub-agent view in a split instead of a browser.
+wezterm.on('open-uri', function(_, pane, uri)
+  local sid = uri:match('^claude%-agents://([%w_%-]+)')
+  if not sid then return end
+  pane:split {
+    direction = 'Right',
+    size = 0.4,
+    args = { wezterm.home_dir .. '/.claude/agents-watch.sh', sid },
+  }
+  return false
+end)
+
 return config
