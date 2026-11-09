@@ -24,7 +24,10 @@ while IFS= read -r line; do F+=("$line"); done < <(jq -r '
   (.cost.total_cost_usd | if type == "number" then . * 100 | round | tostring else "" end),
   (.rate_limits.five_hour.used_percentage | n),
   (.rate_limits.seven_day.used_percentage | n),
-  (.session_id | s)
+  (.session_id | s),
+  (.rate_limits.five_hour.resets_at | n),
+  (.rate_limits.seven_day.resets_at | n),
+  (now | floor | tostring)
 ' <<<"$input" 2>/dev/null)
 
 MODEL=${F[0]}     DIR=${F[1]}
@@ -32,6 +35,7 @@ R_HOST=${F[2]}    R_OWNER=${F[3]}   R_NAME=${F[4]}
 PR=${F[5]}        PR_URL=${F[6]}    PR_STATE=${F[7]}
 CTX=${F[8]}       CENTS=${F[9]}
 RL5=${F[10]}      RL7=${F[11]}      SID=${F[12]}
+RL5_AT=${F[13]}   RL7_AT=${F[14]}   NOW=${F[15]}
 
 SID=${SID//[!A-Za-z0-9_-]/}
 SID=${SID:-default}
@@ -96,6 +100,24 @@ git_info() {
     && mv -f "$cache.$$" "$cache" 2>/dev/null
 }
 
+# Rate limits are per account but each session only sees them at its own
+# last API call: share the freshest value (newest window, highest %).
+share_limit() {
+  local file=$1 pct=$2 reset=$3 f_reset="" f_pct=""
+  [[ -r $file ]] && read -r f_reset f_pct <"$file"
+  [[ $f_reset =~ ^[0-9]+$ && $f_pct =~ ^[0-9]+$ ]] || f_reset="" f_pct=""
+  [[ -n $f_reset && $NOW =~ ^[0-9]+$ ]] && (( f_reset <= NOW )) && f_reset="" f_pct=""
+  if [[ $pct =~ ^[0-9]+$ && $reset =~ ^[0-9]+$ ]]; then
+    if [[ -z $f_reset ]] || (( reset > f_reset + 60 )) \
+       || { (( reset >= f_reset - 60 )) && (( pct > f_pct )); }; then
+      printf '%s %s\n' "$reset" "$pct" >"$file.$$" 2>/dev/null && mv -f "$file.$$" "$file" 2>/dev/null
+      SHARED=$pct
+      return
+    fi
+  fi
+  SHARED=${f_pct:-$pct}
+}
+
 SEGS=()
 
 MODEL=${MODEL%% (*}
@@ -107,9 +129,10 @@ if [[ -n $DIR ]]; then
   SEGS+=("$LINK")
 fi
 
+CACHE_DIR="${TMPDIR:-/tmp}/claude-statusline"
+[[ -d $CACHE_DIR ]] || mkdir -p -m 700 "$CACHE_DIR" 2>/dev/null
+
 if [[ -n $DIR && -d $DIR ]]; then
-  CACHE_DIR="${TMPDIR:-/tmp}/claude-statusline"
-  [[ -d $CACHE_DIR ]] || mkdir -p -m 700 "$CACHE_DIR" 2>/dev/null
   git_info "$DIR" "$CACHE_DIR/git-$SID.cache"
   if [[ -n $BRANCH ]]; then
     text="⎇ $BRANCH"
@@ -148,6 +171,9 @@ if [[ $CENTS =~ ^[0-9]+$ ]]; then
   printf -v cost '$%d.%02d' $(( CENTS / 100 )) $(( CENTS % 100 ))
   SEGS+=("${GRAY}${cost}${RESET}")
 fi
+
+share_limit "$CACHE_DIR/quota-5h" "$RL5" "$RL5_AT"; RL5=$SHARED
+share_limit "$CACHE_DIR/quota-7d" "$RL7" "$RL7_AT"; RL7=$SHARED
 
 if [[ $RL5 =~ ^[0-9]+$ ]]; then
   clamp_pct "$RL5"
