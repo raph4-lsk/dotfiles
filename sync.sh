@@ -126,6 +126,16 @@ rsync -a --delete \
 
 echo "✅ Claude Code skills"
 
+# ─── CLAUDE CODE THEMES ─────────────────────────────────────
+# No --delete: themes created with /theme live in the same folder.
+mkdir -p "$CLAUDE_DIR/themes"
+
+rsync -a \
+    "$CONFIG_DIR/claude/themes/" \
+    "$CLAUDE_DIR/themes/"
+
+echo "✅ Claude Code themes"
+
 # ─── CLAUDE CODE STATUSLINE ────────────────────────────────
 
 cp "$CONFIG_DIR/claude/statusline.sh" \
