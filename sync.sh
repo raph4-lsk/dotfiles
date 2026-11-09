@@ -131,7 +131,10 @@ echo "✅ Claude Code skills"
 cp "$CONFIG_DIR/claude/statusline.sh" \
    "$CLAUDE_DIR/statusline.sh"
 
-chmod +x "$CLAUDE_DIR/statusline.sh"
+cp "$CONFIG_DIR/claude/subagent-statusline.sh" \
+   "$CLAUDE_DIR/subagent-statusline.sh"
+
+chmod +x "$CLAUDE_DIR/statusline.sh" "$CLAUDE_DIR/subagent-statusline.sh"
 
 echo "✅ Claude Code statusline"
 
