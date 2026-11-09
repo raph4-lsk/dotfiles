@@ -1,7 +1,8 @@
 #!/bin/bash
 # ─── CLAUDE CODE SUBAGENT STATUSLINE ────────────────────────
-# One row per sub-agent in the Agents panel, plus a counter file
-# (total running failed done) read by statusline.sh.
+# One row per sub-agent in the Agents panel, plus two per-session files:
+# a counter (total running failed done) read by statusline.sh and a
+# detail view shown by agents-watch.sh.
 
 umask 077
 export LC_ALL=en_US.UTF-8
@@ -14,6 +15,7 @@ while IFS= read -r line; do F+=("$line"); done < <(jq -r '
   def num: type == "number";
   (.session_id | s),
   (.columns | if num then floor | tostring else "" end),
+  (now | strflocaltime("%H:%M:%S")),
   ((.tasks // [])[] |
     (.id | s),
     (if (.name // "") != "" then .name else .type end | s),
@@ -26,7 +28,13 @@ while IFS= read -r line; do F+=("$line"); done < <(jq -r '
             | floor | if . < 0 then 0 else . end | tostring
        else "" end),
     (.cwd | s | split("/") | map(select(. != "")) | last // ""),
-    (if (.description // "") != "" then .description else .label end | s)
+    (if (.description // "") != "" then .description else .label end | s),
+    (.agentType | s),
+    (.effort | s),
+    (.tokenCount | if num then floor | tostring else "" end),
+    (.contextWindowSize | if num then floor | tostring else "" end),
+    (.cwd | s),
+    (.label | s)
   )
 ' <<<"$input" 2>/dev/null)
 
@@ -36,6 +44,7 @@ SID=${F[0]//[!A-Za-z0-9_-]/}
 SID=${SID:-default}
 COLS=${F[1]:-${COLUMNS:-80}}
 [[ $COLS =~ ^[0-9]+$ ]] || COLS=80
+UPDATED=${F[2]}
 
 E=$'\033'
 RESET="$E[0m"; BOLD="$E[1m"; GRAY="$E[90m"
@@ -55,6 +64,30 @@ emit() {
   printf '{"id":"%s","content":"%s"}\n' "$id" "$ESCAPED"
 }
 
+format_tokens() {
+  local n=$1
+  if   (( n >= 1000000 )); then printf -v TOK '%d.%dM' $(( n / 1000000 )) $(( n % 1000000 / 100000 ))
+  elif (( n >= 1000 ));    then TOK="$(( n / 1000 ))k"
+  else                          TOK=$n
+  fi
+}
+
+pct_color() {
+  if   (( $1 >= 80 )); then COLOR=$RED
+  elif (( $1 >= 50 )); then COLOR=$YELLOW
+  else                      COLOR=$GREEN
+  fi
+}
+
+make_bar() {
+  local p=$1 w=$2 f j
+  f=$(( p * w / 100 )); (( p > 0 && f == 0 )) && f=1
+  BAR=""
+  for (( j = 0; j < w; j++ )); do
+    if (( j < f )); then BAR+="▰"; else BAR+="▱"; fi
+  done
+}
+
 format_duration() {
   local t=$1
   if   (( t < 60 ));   then DUR="${t}s"
@@ -63,14 +96,14 @@ format_duration() {
   fi
 }
 
-PER=8
-COUNT=$(( (${#F[@]} - 2) / PER ))
+PER=14
+COUNT=$(( (${#F[@]} - 3) / PER ))
 HIDE_DONE=${CC_HIDE_DONE:-1}
 N_RUN=0 N_FAIL=0 N_DONE=0
 STATE=() VISIBLE=()
 
 for (( i = 0; i < COUNT; i++ )); do
-  case ${F[2 + i * PER + 2]} in
+  case ${F[3 + i * PER + 2]} in
     *fail*|*error*)             st=fail; N_FAIL=$(( N_FAIL + 1 )) ;;
     *kill*|*cancel*|*stop*)     st=kill ;;
     *complet*|*done*|*success*) st=done; N_DONE=$(( N_DONE + 1 )) ;;
@@ -78,7 +111,7 @@ for (( i = 0; i < COUNT; i++ )); do
   esac
   STATE[i]=$st
   if [[ $st == done && $HIDE_DONE != 0 ]]; then
-    emit "${F[2 + i * PER]}" ""
+    emit "${F[3 + i * PER]}" ""
   else
     VISIBLE+=("$i")
   fi
@@ -86,7 +119,7 @@ done
 
 for (( k = 0; k < ${#VISIBLE[@]}; k++ )); do
   i=${VISIBLE[k]}
-  b=$(( 2 + i * PER ))
+  b=$(( 3 + i * PER ))
   id=${F[b]} name=${F[b + 1]} model=${F[b + 3]} pct=${F[b + 4]}
   elapsed=${F[b + 5]} dir=${F[b + 6]} desc=${F[b + 7]}
   st=${STATE[i]}
@@ -109,16 +142,8 @@ for (( k = 0; k < ${#VISIBLE[@]}; k++ )); do
   else
     if [[ $pct =~ ^[0-9]+$ ]]; then
       (( pct > 100 )) && pct=100
-      if   (( pct >= 80 )); then c=$RED
-      elif (( pct >= 50 )); then c=$YELLOW
-      else                       c=$GREEN
-      fi
-      f=$(( pct * 5 / 100 )); (( pct > 0 && f == 0 )) && f=1
-      bar=""
-      for (( j = 0; j < 5; j++ )); do
-        if (( j < f )); then bar+="▰"; else bar+="▱"; fi
-      done
-      out+=" ${c}${bar} ${pct}%${RESET}"; plain+=" $bar ${pct}%"
+      pct_color "$pct"; make_bar "$pct" 5
+      out+=" ${COLOR}${BAR} ${pct}%${RESET}"; plain+=" $BAR ${pct}%"
     fi
     if [[ $st == run && $elapsed =~ ^[0-9]+$ ]]; then
       format_duration "$elapsed"
@@ -137,9 +162,59 @@ for (( k = 0; k < ${#VISIBLE[@]}; k++ )); do
   emit "$id" "$out"
 done
 
+DETAIL="" TILDE="~"
+for (( i = 0; i < COUNT; i++ )); do
+  b=$(( 3 + i * PER ))
+  name=${F[b + 1]} model=${F[b + 3]} pct=${F[b + 4]} elapsed=${F[b + 5]}
+  desc=${F[b + 7]} atype=${F[b + 8]} effort=${F[b + 9]} tokens=${F[b + 10]}
+  size=${F[b + 11]} cwd=${F[b + 12]} label=${F[b + 13]}
+  case ${STATE[i]} in
+    fail) icon="${RED}✗${RESET}" ;;
+    kill) icon="${GRAY}■${RESET}" ;;
+    done) icon="${GREEN}✓${RESET}" ;;
+    *)    icon="${YELLOW}⟳${RESET}" ;;
+  esac
+
+  meta=""
+  for v in "$atype" "$model" "$effort"; do
+    [[ -n $v ]] && meta+="${meta:+ · }$v"
+  done
+  line="$icon ${BOLD}${name}${RESET}"
+  [[ -n $meta ]] && line+="  ${GRAY}${meta}${RESET}"
+  if [[ ${STATE[i]} == run && $elapsed =~ ^[0-9]+$ ]]; then
+    format_duration "$elapsed"; line+="  $DUR"
+  fi
+  DETAIL+="$line"$'\n'
+
+  if [[ $pct =~ ^[0-9]+$ ]]; then
+    (( pct > 100 )) && pct=100
+    pct_color "$pct"; make_bar "$pct" 20
+    format_tokens "$tokens"; used=$TOK
+    format_tokens "$size"
+    DETAIL+="  ${GRAY}context${RESET} ${COLOR}${BAR} ${pct}%${RESET}  ${used}/${TOK}"$'\n'
+  elif [[ $tokens =~ ^[0-9]+$ ]]; then
+    format_tokens "$tokens"
+    DETAIL+="  ${GRAY}tokens${RESET}  $TOK"$'\n'
+  fi
+  [[ -n $cwd ]]  && DETAIL+="  ${GRAY}cwd${RESET}     ${cwd/#"$HOME"/$TILDE}"$'\n'
+  [[ -n $desc ]] && DETAIL+="  ${GRAY}task${RESET}    $desc"$'\n'
+  [[ -n $label && $label != "$desc" ]] && DETAIL+="  ${GRAY}now${RESET}     $label"$'\n'
+  DETAIL+=$'\n'
+done
+
+head="${BOLD}Agents${RESET}"
+(( N_RUN > 0 ))  && head+="  ${YELLOW}⟳${N_RUN}${RESET}"
+(( N_FAIL > 0 )) && head+="  ${RED}✗${N_FAIL}${RESET}"
+(( N_DONE > 0 )) && head+="  ${GREEN}✓${N_DONE}${RESET}"
+head+="  ${GRAY}updated ${UPDATED}${RESET}"
+(( COUNT == 0 )) && DETAIL="${GRAY}No sub-agent${RESET}"$'\n'
+
 AG_DIR="${CC_AGENTS_DIR:-${TMPDIR:-/tmp}/claude-agents}"
 mkdir -p "$AG_DIR" 2>/dev/null && chmod 700 "$AG_DIR" 2>/dev/null
 tmp="$AG_DIR/agents-$SID.count.tmp.$$"
 printf '%d %d %d %d\n' "$COUNT" "$N_RUN" "$N_FAIL" "$N_DONE" >"$tmp" 2>/dev/null \
   && mv -f "$tmp" "$AG_DIR/agents-$SID.count" 2>/dev/null
+tmp="$AG_DIR/agents-$SID.txt.tmp.$$"
+printf '%s\n\n%s' "$head" "$DETAIL" >"$tmp" 2>/dev/null \
+  && mv -f "$tmp" "$AG_DIR/agents-$SID.txt" 2>/dev/null
 exit 0

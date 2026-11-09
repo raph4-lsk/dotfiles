@@ -149,13 +149,20 @@ if [[ $CENTS =~ ^[0-9]+$ ]]; then
   SEGS+=("${GRAY}${cost}${RESET}")
 fi
 
-for pair in "5h:$RL5" "7j:$RL7"; do
-  v=${pair#*:}
-  [[ $v =~ ^[0-9]+$ ]] || continue
-  (( v < 60 )) && continue
-  if (( v >= 85 )); then COLOR=$RED; else COLOR=$YELLOW; fi
-  SEGS+=("${COLOR}! ${pair%%:*} ${v}%${RESET}")
-done
+if [[ $RL5 =~ ^[0-9]+$ ]]; then
+  clamp_pct "$RL5"
+  make_bar "$PCT" 5
+  if   (( PCT >= 85 )); then COLOR=$RED;    warn="! "
+  elif (( PCT >= 60 )); then COLOR=$YELLOW; warn="! "
+  else                       COLOR=$GRAY;   warn=""
+  fi
+  SEGS+=("${COLOR}${warn}5h ${BAR} ${PCT}%${RESET}")
+fi
+
+if [[ $RL7 =~ ^[0-9]+$ ]] && (( RL7 >= 60 )); then
+  if (( RL7 >= 85 )); then COLOR=$RED; else COLOR=$YELLOW; fi
+  SEGS+=("${COLOR}! 7j ${RL7}%${RESET}")
+fi
 
 AG_FILE="${CC_AGENTS_DIR:-${TMPDIR:-/tmp}/claude-agents}/agents-$SID.count"
 if [[ -r $AG_FILE ]] && read -r a_total a_run a_fail a_done <"$AG_FILE"; then
@@ -163,7 +170,8 @@ if [[ -r $AG_FILE ]] && read -r a_total a_run a_fail a_done <"$AG_FILE"; then
     [[ ${!v} =~ ^[0-9]+$ ]] || eval "$v=0"
   done
   if (( a_total > 0 && a_run + a_fail + a_done > 0 )); then
-    seg="${VIOLET}${BOLD}Agents${RESET}"
+    link "claude-agents://$SID" "Agents"
+    seg="${VIOLET}${BOLD}${LINK}${RESET}"
     (( a_run > 0 ))  && seg+=" ${YELLOW}⟳${a_run}${RESET}"
     (( a_fail > 0 )) && seg+=" ${RED}${BOLD}✗${a_fail}${RESET}"
     (( a_done > 0 )) && seg+=" ${GREEN}✓${a_done}${RESET}"

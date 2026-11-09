@@ -134,7 +134,11 @@ cp "$CONFIG_DIR/claude/statusline.sh" \
 cp "$CONFIG_DIR/claude/subagent-statusline.sh" \
    "$CLAUDE_DIR/subagent-statusline.sh"
 
-chmod +x "$CLAUDE_DIR/statusline.sh" "$CLAUDE_DIR/subagent-statusline.sh"
+cp "$CONFIG_DIR/claude/agents-watch.sh" \
+   "$CLAUDE_DIR/agents-watch.sh"
+
+chmod +x "$CLAUDE_DIR/statusline.sh" "$CLAUDE_DIR/subagent-statusline.sh" \
+   "$CLAUDE_DIR/agents-watch.sh"
 
 echo "✅ Claude Code statusline"
 
