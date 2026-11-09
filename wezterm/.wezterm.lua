@@ -86,15 +86,30 @@ end)
 
 -- ─── CLAUDE CODE: Agents link ───────────────────────────────
 -- The statusline links "Agents" to claude-agents://<session_id>:
--- open the live sub-agent view in a split instead of a browser.
+-- open the live sub-agent view in a split instead of a browser,
+-- a second click closes it.
+local function agents_watch_pane(id)
+  if not id then return nil end
+  local ok, p = pcall(mux.get_pane, id)
+  if ok then return p end
+end
+
 wezterm.on('open-uri', function(_, pane, uri)
   local sid = uri:match('^claude%-agents://([%w_%-]+)')
   if not sid then return end
-  pane:split {
-    direction = 'Right',
-    size = 0.4,
-    args = { wezterm.home_dir .. '/.claude/agents-watch.sh', sid },
-  }
+  local key = 'agents_pane_' .. sid
+  local open = agents_watch_pane(wezterm.GLOBAL[key])
+  if open then
+    open:send_text('q')
+    wezterm.GLOBAL[key] = nil
+  else
+    local new = pane:split {
+      direction = 'Right',
+      size = 0.4,
+      args = { wezterm.home_dir .. '/.claude/agents-watch.sh', sid },
+    }
+    wezterm.GLOBAL[key] = new:pane_id()
+  end
   return false
 end)
 
