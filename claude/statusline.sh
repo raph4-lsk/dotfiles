@@ -1,85 +1,179 @@
 #!/bin/bash
 # ─── CLAUDE CODE STATUSLINE ─────────────────────────────────
-# Ligne 1 : modele, effort, dossier, branche, PR.
-# Ligne 2 : barre de contexte coloree, tokens, cout, quota 5h.
-# Registered via "statusLine" in ~/.claude/settings.json.
-# Runs on every assistant message, so it stays to a single jq call.
+# Model │ dir │ branch │ PR │ context │ cost │ limits │ agents
+# Single jq call per run; git cached 5 s per session; agent counters
+# come from the file written by subagent-statusline.sh.
+
+umask 077
 
 input=$(cat)
 
-# Un champ par ligne : IFS=tab fusionnerait les champs vides et decalerait tout.
-# Boucle read plutot que mapfile, absent du bash 3.2 livre par macOS.
-FIELD=()
-while IFS= read -r line; do FIELD+=("$line"); done < <(jq -r '[
-    .model.display_name,
-    (.effort.level // ""),
-    (if .fast_mode then "1" else "" end),
-    ((.context_window.used_percentage // 0) | floor),
-    (.context_window.total_input_tokens // 0),
-    (.context_window.context_window_size // 0),
-    (.cost.total_cost_usd // 0),
-    ((.cost.total_duration_ms // 0) / 60000 | floor),
-    (.pr.number // ""),
-    (.pr.review_state // ""),
-    (.rate_limits.five_hour.used_percentage // ""),
-    (.workspace.git_worktree // .worktree.name // "")
-  ] | .[] | tostring' <<<"$input")
+F=()
+while IFS= read -r line; do F+=("$line"); done < <(jq -r '
+  def s: if . == null then "" else tostring | gsub("[[:cntrl:]]"; " ") end;
+  def n: if type == "number" then floor | tostring else "" end;
+  (.model.display_name | s),
+  (.workspace.current_dir // .cwd | s),
+  (.workspace.repo.host | s),
+  (.workspace.repo.owner | s),
+  (.workspace.repo.name | s),
+  (.pr.number | s),
+  (.pr.url | s),
+  (.pr.review_state | s),
+  (.context_window.used_percentage | n),
+  (.cost.total_cost_usd | if type == "number" then . * 100 | round | tostring else "" end),
+  (.rate_limits.five_hour.used_percentage | n),
+  (.rate_limits.seven_day.used_percentage | n),
+  (.session_id | s)
+' <<<"$input" 2>/dev/null)
 
-MODEL=${FIELD[0]}    EFFORT=${FIELD[1]}    FAST=${FIELD[2]}
-PCT=${FIELD[3]}      USED=${FIELD[4]}      SIZE=${FIELD[5]}
-COST=${FIELD[6]}     DUR=${FIELD[7]}       PR=${FIELD[8]}
-PR_STATE=${FIELD[9]} RL5=${FIELD[10]}      WT=${FIELD[11]}
+MODEL=${F[0]}     DIR=${F[1]}
+R_HOST=${F[2]}    R_OWNER=${F[3]}   R_NAME=${F[4]}
+PR=${F[5]}        PR_URL=${F[6]}    PR_STATE=${F[7]}
+CTX=${F[8]}       CENTS=${F[9]}
+RL5=${F[10]}      RL7=${F[11]}      SID=${F[12]}
 
-# "Opus 5 (1M context)" -> "Opus 5" : la taille est deja dans le compteur de tokens.
+SID=${SID//[!A-Za-z0-9_-]/}
+SID=${SID:-default}
+
+E=$'\033'
+RESET="$E[0m"; BOLD="$E[1m"; GRAY="$E[90m"
+RED="$E[31m"; GREEN="$E[32m"; YELLOW="$E[33m"; MAGENTA="$E[35m"
+VIOLET="$E[38;2;177;121;252m"
+SEP=" ${GRAY}│${RESET} "
+
+link() { LINK="$E]8;;$1"$'\a'"$2$E]8;;"$'\a'; }
+
+clamp_pct() {
+  local p=${1:-0}
+  [[ $p =~ ^-?[0-9]+$ ]] || p=0
+  (( p < 0 )) && p=0
+  (( p > 100 )) && p=100
+  PCT=$p
+}
+
+level_color() {
+  if   (( $1 >= 80 )); then COLOR=$RED
+  elif (( $1 >= 50 )); then COLOR=$YELLOW
+  else                      COLOR=$GREEN
+  fi
+}
+
+make_bar() {
+  local p=$1 w=$2 f e
+  f=$(( p * w / 100 ))
+  (( p > 0 && f == 0 )) && f=1
+  e=$(( w - f ))
+  BAR=""
+  while (( f-- > 0 )); do BAR+="▰"; done
+  while (( e-- > 0 )); do BAR+="▱"; done
+}
+
+git_info() {
+  local dir=$1 cache=$2 now mtime cdir line xy oid=""
+  if [[ -f $cache ]]; then
+    now=$(date +%s)
+    mtime=$(stat -f %m "$cache" 2>/dev/null || echo 0)
+    if (( now - mtime < 5 )); then
+      { IFS= read -r cdir; IFS= read -r BRANCH; read -r STAGED; read -r MODIFIED; } <"$cache"
+      [[ $cdir == "$dir" ]] && return
+    fi
+  fi
+  BRANCH="" STAGED=0 MODIFIED=0
+  while IFS= read -r line; do
+    case $line in
+      '# branch.oid '*)  oid=${line#'# branch.oid '} ;;
+      '# branch.head '*) BRANCH=${line#'# branch.head '} ;;
+      [12u]' '*)
+        xy=${line:2:2}
+        [[ ${xy:0:1} != . ]] && STAGED=$(( STAGED + 1 ))
+        [[ ${xy:1:1} != . ]] && MODIFIED=$(( MODIFIED + 1 ))
+        ;;
+    esac
+  done < <(git -C "$dir" --no-optional-locks status --porcelain=v2 --branch -uno 2>/dev/null)
+  [[ $BRANCH == '(detached)' ]] && BRANCH=${oid:0:7}
+  printf '%s\n%s\n%s\n%s\n' "$dir" "$BRANCH" "$STAGED" "$MODIFIED" >"$cache.$$" 2>/dev/null \
+    && mv -f "$cache.$$" "$cache" 2>/dev/null
+}
+
+SEGS=()
+
 MODEL=${MODEL%% (*}
+[[ -n $MODEL ]] && SEGS+=("${VIOLET}${BOLD}${MODEL}${RESET}")
 
-# Garde-fou : un PCT hors bornes ferait exploser la boucle de la barre.
-PCT=${PCT%%.*}; PCT=${PCT:-0}
-(( PCT < 0 ))   && PCT=0
-(( PCT > 100 )) && PCT=100
-
-RESET=$'\033[0m'; DIM=$'\033[2m'; BLUE=$'\033[34m'
-GREEN=$'\033[32m'; YELLOW=$'\033[33m'; RED=$'\033[31m'
-
-# Barre coloree par seuil : vert < 50, jaune < 80, rouge au-dela.
-if   (( PCT >= 80 )); then C=$RED
-elif (( PCT >= 50 )); then C=$YELLOW
-else                       C=$GREEN
+if [[ -n $DIR ]]; then
+  name=${DIR##*/}
+  link "file://${DIR// /%20}" "${name:-/}"
+  SEGS+=("$LINK")
 fi
-W=10; F=$(( PCT * W / 100 ))
-# Un bloc minimum des que le contexte n'est pas vide, sinon 1..9% affiche une barre vide.
-(( PCT > 0 && F == 0 )) && F=1
-E=$(( W - F )); BAR=""
-(( F > 0 )) && printf -v fill "%${F}s" && BAR="${fill// /▓}"
-(( E > 0 )) && printf -v pad  "%${E}s" && BAR="${BAR}${pad// /░}"
 
-fmt() { awk -v n="$1" 'BEGIN{if(n>=1e6)printf "%.1fM",n/1e6; else if(n>=1e3)printf "%.0fk",n/1e3; else printf "%d",n}'; }
+if [[ -n $DIR && -d $DIR ]]; then
+  CACHE_DIR="${TMPDIR:-/tmp}/claude-statusline"
+  [[ -d $CACHE_DIR ]] || mkdir -p -m 700 "$CACHE_DIR" 2>/dev/null
+  git_info "$DIR" "$CACHE_DIR/git-$SID.cache"
+  if [[ -n $BRANCH ]]; then
+    text="⎇ $BRANCH"
+    if [[ -n $R_HOST && -n $R_OWNER && -n $R_NAME ]]; then
+      link "https://$R_HOST/$R_OWNER/$R_NAME/tree/$BRANCH" "$text"
+      text=$LINK
+    fi
+    seg="${MAGENTA}${text}${RESET}"
+    (( STAGED > 0 ))   && seg+=" ${GREEN}+${STAGED}${RESET}"
+    (( MODIFIED > 0 )) && seg+=" ${YELLOW}~${MODIFIED}${RESET}"
+    SEGS+=("$seg")
+  fi
+fi
 
-# ─── LIGNE 1 : modele, contexte, cout ───────────────────────
-# Pas de dossier ni de branche : deja visibles ailleurs, et ca evite tout appel git.
-L1="🧠 ${BLUE}${MODEL}${RESET}"
-[[ -n $EFFORT ]] && L1+=" ${DIM}(${EFFORT})${RESET}"
-[[ -n $FAST   ]] && L1+=" ⚡"
-[[ -n $WT     ]] && L1+="  🌳 ${WT}"
 if [[ -n $PR ]]; then
   case $PR_STATE in
-    approved)          S="✅" ;;
-    changes_requested) S="🔴" ;;
-    pending)           S="🕓" ;;
-    draft)             S="📝" ;;
-    *)                 S=""   ;;
+    approved)          COLOR=$GREEN ;;
+    changes_requested) COLOR=$RED ;;
+    pending)           COLOR=$YELLOW ;;
+    draft)             COLOR=$GRAY ;;
+    *)                 COLOR="" ;;
   esac
-  L1+="  🔀 #${PR} ${S}"
+  text="PR #$PR"
+  if [[ -n $PR_URL ]]; then link "$PR_URL" "$text"; text=$LINK; fi
+  SEGS+=("${COLOR}${text}${RESET}")
 fi
 
-L1+="  ${C}${BAR}${RESET} ${PCT}% ${DIM}$(fmt "$USED")/$(fmt "$SIZE")${RESET}"
-L1+="  💰 $(printf "%.2f" "${COST:-0}")\$"
+if [[ -n $CTX ]]; then
+  clamp_pct "$CTX"
+  level_color "$PCT"
+  make_bar "$PCT" 10
+  SEGS+=("${COLOR}${BAR} ${PCT}%${RESET}")
+fi
 
-# ─── LIGNE 2 : duree et quota ───────────────────────────────
-L2=""
-(( DUR > 0 ))  && L2+="⏱ ${DUR}m"
-[[ -n $RL5 ]]  && { [[ -n $L2 ]] && L2+="  "; L2+="📊 ${RL5%.*}%-5h"; }
+if [[ $CENTS =~ ^[0-9]+$ ]]; then
+  printf -v cost '$%d.%02d' $(( CENTS / 100 )) $(( CENTS % 100 ))
+  SEGS+=("${GRAY}${cost}${RESET}")
+fi
 
-# Ligne 2 omise si elle est vide, sinon une rangee blanche apparait.
-printf '%s\n' "$L1"
-[[ -n $L2 ]] && printf '%s\n' "$L2"
+for pair in "5h:$RL5" "7j:$RL7"; do
+  v=${pair#*:}
+  [[ $v =~ ^[0-9]+$ ]] || continue
+  (( v < 60 )) && continue
+  if (( v >= 85 )); then COLOR=$RED; else COLOR=$YELLOW; fi
+  SEGS+=("${COLOR}! ${pair%%:*} ${v}%${RESET}")
+done
+
+AG_FILE="${CC_AGENTS_DIR:-${TMPDIR:-/tmp}/claude-agents}/agents-$SID.count"
+if [[ -r $AG_FILE ]] && read -r a_total a_run a_fail a_done <"$AG_FILE"; then
+  for v in a_total a_run a_fail a_done; do
+    [[ ${!v} =~ ^[0-9]+$ ]] || eval "$v=0"
+  done
+  if (( a_total > 0 && a_run + a_fail + a_done > 0 )); then
+    seg="${VIOLET}${BOLD}Agents${RESET}"
+    (( a_run > 0 ))  && seg+=" ${YELLOW}⟳${a_run}${RESET}"
+    (( a_fail > 0 )) && seg+=" ${RED}${BOLD}✗${a_fail}${RESET}"
+    (( a_done > 0 )) && seg+=" ${GREEN}✓${a_done}${RESET}"
+    SEGS+=("$seg")
+  fi
+fi
+
+out=""
+for seg in "${SEGS[@]}"; do
+  [[ -n $out ]] && out+=$SEP
+  out+=$seg
+done
+printf '%s\n' "$out"
