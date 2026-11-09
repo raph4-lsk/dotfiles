@@ -1,0 +1,7 @@
+{
+  "name": "Tokyo",
+  "base": "dark",
+  "overrides": {
+    "warning": "#7aa2f7"
+  }
+}
