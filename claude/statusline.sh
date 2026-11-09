@@ -27,7 +27,8 @@ while IFS= read -r line; do F+=("$line"); done < <(jq -r '
   (.session_id | s),
   (.rate_limits.five_hour.resets_at | n),
   (.rate_limits.seven_day.resets_at | n),
-  (now | floor | tostring)
+  (now | floor | tostring),
+  (.transcript_path | s)
 ' <<<"$input" 2>/dev/null)
 
 MODEL=${F[0]}     DIR=${F[1]}
@@ -36,6 +37,7 @@ PR=${F[5]}        PR_URL=${F[6]}    PR_STATE=${F[7]}
 CTX=${F[8]}       CENTS=${F[9]}
 RL5=${F[10]}      RL7=${F[11]}      SID=${F[12]}
 RL5_AT=${F[13]}   RL7_AT=${F[14]}   NOW=${F[15]}
+TRANSCRIPT=${F[16]}
 
 SID=${SID//[!A-Za-z0-9_-]/}
 SID=${SID:-default}
@@ -190,23 +192,33 @@ if [[ $RL7 =~ ^[0-9]+$ ]] && (( RL7 >= 60 )); then
   SEGS+=("${COLOR}! 7j ${RL7}%${RESET}")
 fi
 
-AG_FILE="${CC_AGENTS_DIR:-${TMPDIR:-/tmp}/claude-agents}/agents-$SID.count"
-# Claude Code stops calling the sub-agent script once no task is left,
-# so a counter not refreshed for 30 s is stale.
-ag_mtime=$(stat -f %m "$AG_FILE" 2>/dev/null || echo 0)
-if [[ -r $AG_FILE && $NOW =~ ^[0-9]+$ ]] && (( NOW - ag_mtime <= 30 )) \
-   && read -r a_total a_run a_fail a_done <"$AG_FILE"; then
-  for v in a_total a_run a_fail a_done; do
-    [[ ${!v} =~ ^[0-9]+$ ]] || eval "$v=0"
-  done
-  if (( a_total > 0 && a_run + a_fail + a_done > 0 )); then
-    link "claude-agents://$SID" "Agents"
+if [[ $SID != default ]]; then
+  # Session summary for agents-watch.sh: transcript, folder, model, context.
+  printf '%s\n%s\n%s\n%s\n' "$TRANSCRIPT" "${DIR##*/}" "$MODEL" "$CTX" \
+    >"$CACHE_DIR/session-$SID.$$" 2>/dev/null \
+    && mv -f "$CACHE_DIR/session-$SID.$$" "$CACHE_DIR/session-$SID" 2>/dev/null
+
+  # Claude Code stops calling the sub-agent script once no task is left,
+  # so a counter not refreshed for 30 s is stale.
+  AG_FILE="${CC_AGENTS_DIR:-${TMPDIR:-/tmp}/claude-agents}/agents-$SID.count"
+  a_run=0 a_fail=0 a_done=0
+  ag_mtime=$(stat -f %m "$AG_FILE" 2>/dev/null || echo 0)
+  if [[ -r $AG_FILE && $NOW =~ ^[0-9]+$ ]] && (( NOW - ag_mtime <= 30 )); then
+    read -r _ a_run a_fail a_done <"$AG_FILE"
+    for v in a_run a_fail a_done; do
+      [[ ${!v} =~ ^[0-9]+$ ]] || eval "$v=0"
+    done
+  fi
+  link "claude-agents://$SID" "Agents"
+  if (( a_run + a_fail + a_done > 0 )); then
     seg="${VIOLET}${BOLD}${LINK}${RESET}"
     (( a_run > 0 ))  && seg+=" ${YELLOW}⟳${a_run}${RESET}"
     (( a_fail > 0 )) && seg+=" ${RED}${BOLD}✗${a_fail}${RESET}"
     (( a_done > 0 )) && seg+=" ${GREEN}✓${a_done}${RESET}"
-    SEGS+=("$seg")
+  else
+    seg="${GRAY}${LINK}${RESET}"
   fi
+  SEGS+=("$seg")
 fi
 
 out=""
