@@ -191,7 +191,11 @@ if [[ $RL7 =~ ^[0-9]+$ ]] && (( RL7 >= 60 )); then
 fi
 
 AG_FILE="${CC_AGENTS_DIR:-${TMPDIR:-/tmp}/claude-agents}/agents-$SID.count"
-if [[ -r $AG_FILE ]] && read -r a_total a_run a_fail a_done <"$AG_FILE"; then
+# Claude Code stops calling the sub-agent script once no task is left,
+# so a counter not refreshed for 30 s is stale.
+ag_mtime=$(stat -f %m "$AG_FILE" 2>/dev/null || echo 0)
+if [[ -r $AG_FILE && $NOW =~ ^[0-9]+$ ]] && (( NOW - ag_mtime <= 30 )) \
+   && read -r a_total a_run a_fail a_done <"$AG_FILE"; then
   for v in a_total a_run a_fail a_done; do
     [[ ${!v} =~ ^[0-9]+$ ]] || eval "$v=0"
   done
