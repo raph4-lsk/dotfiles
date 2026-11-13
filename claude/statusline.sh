@@ -219,6 +219,9 @@ if [[ $SID != default ]]; then
     seg="${GRAY}${LINK}${RESET}"
   fi
   SEGS+=("$seg")
+
+  link "claude-voice://$SID" "🔊"
+  SEGS+=("$LINK")
 fi
 
 out=""
