@@ -1,7 +1,8 @@
 #!/bin/bash
 # ─── CLAUDE CODE VOICE ──────────────────────────────────────
-# Reads the last Claude reply aloud with ElevenLabs. Opened by clicking
-# 🔊 in the statusline (WezTerm); a click during playback stops it.
+# Reads the last Claude reply aloud with ElevenLabs, or the macOS say
+# voice when there is no key or the API fails. Opened by clicking 🔊 in
+# the statusline (WezTerm); a click during playback stops it.
 # The API key lives in the macOS Keychain, never in this repo.
 
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:$PATH"
@@ -12,6 +13,8 @@ VOICE_ID=${CLAUDE_VOICE_ID:-21m00Tcm4TlvDq8ikWAM}
 MODEL_ID=${CLAUDE_VOICE_MODEL:-eleven_multilingual_v2}
 MAX_CHARS=${CLAUDE_VOICE_MAX:-4000}
 KEYCHAIN_SERVICE=elevenlabs-api-key
+SAY_VOICES=("${CLAUDE_SAY_VOICE:-}" "Audrey (Premium)" "Audrey (Enhanced)" "Audrey"
+  "Flo (French (France))" "Amélie")
 
 sid=${1//[!A-Za-z0-9_-]/}
 sid=${sid:-default}
@@ -99,12 +102,27 @@ hash=${hash%% *}
 cached=""
 [[ -r $MP3.sha ]] && read -r cached <"$MP3.sha"
 
+speak_local() {
+  local installed v voice=""
+  installed=$'\n'$(say -v '?' 2>/dev/null)
+  for v in "${SAY_VOICES[@]}"; do
+    if [[ -n $v && $installed == *$'\n'"$v "* ]]; then
+      voice=$v
+      break
+    fi
+  done
+  if [[ -n $voice ]]; then
+    say -v "$voice" <<<"$text" &
+  else
+    say <<<"$text" &
+  fi
+  wait $!
+  exit 0
+}
+
 if [[ $cached != "$hash" || ! -s $MP3 ]]; then
   key=$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null)
-  if [[ -z $key ]]; then
-    notify "Clé ElevenLabs absente du Trousseau"
-    exit 1
-  fi
+  [[ -n $key ]] || speak_local
   body="$CACHE_DIR/voice-$sid.json"
   jq -n --arg t "$text" --arg m "$MODEL_ID" \
     '{text: $t, model_id: $m,
@@ -117,8 +135,8 @@ if [[ $cached != "$hash" || ! -s $MP3 ]]; then
   rm -f "$body"
   if [[ $code != 200 ]]; then
     rm -f "$MP3.tmp"
-    notify "ElevenLabs a répondu $code"
-    exit 1
+    notify "ElevenLabs a répondu $code, voix macOS"
+    speak_local
   fi
   mv -f "$MP3.tmp" "$MP3"
   printf '%s\n' "$hash" >"$MP3.sha"
