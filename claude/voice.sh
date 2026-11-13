@@ -21,7 +21,6 @@ sid=${sid:-default}
 CACHE_DIR="${TMPDIR:-/tmp}/claude-statusline"
 SESSION="$CACHE_DIR/session-$sid"
 PID_FILE="$CACHE_DIR/voice.pid"
-MP3="$CACHE_DIR/voice-$sid.mp3"
 
 notify() {
   osascript -e "display notification \"$1\" with title \"Claude voice\"" >/dev/null 2>&1
@@ -87,7 +86,7 @@ SPEAKABLE_PL='
   s/^\s+|\s+$//g;
   print;'
 
-text=$(jq -Rrn "$LAST_REPLY_JQ" "$transcript" 2>/dev/null | perl -CSD -e "$SPEAKABLE_PL")
+text=$(tail -c 3000000 "$transcript" | jq -Rrn "$LAST_REPLY_JQ" 2>/dev/null | perl -CSD -e "$SPEAKABLE_PL")
 if [[ -z $text ]]; then
   notify "Rien à lire"
   exit 0
@@ -97,50 +96,101 @@ if (( ${#text} > MAX_CHARS )); then
   text="${text%[.!?]*}. La suite est tronquée."
 fi
 
-hash=$(printf '%s|%s|%s' "$VOICE_ID" "$MODEL_ID" "$text" | shasum -a 256)
-hash=${hash%% *}
-cached=""
-[[ -r $MP3.sha ]] && read -r cached <"$MP3.sha"
+# A short first chunk starts playback fast, the next ones are generated
+# while the previous one plays.
+CHUNK_PL='
+  use utf8; local $/; my $t = <STDIN>; my @out; my $cur = "";
+  for my $s (split /(?<=[.!?:;])\s+/, $t) {
+    my $max = @out ? 800 : 200;
+    if ($cur ne "" && length($cur) + length($s) + 1 > $max) { push @out, $cur; $cur = $s; }
+    else { $cur = $cur eq "" ? $s : "$cur $s"; }
+  }
+  push @out, $cur if $cur ne "";
+  print join("\0", @out), "\0";'
+
+CHUNKS=()
+while IFS= read -r -d '' c; do
+  CHUNKS+=("$c")
+done < <(printf '%s' "$text" | perl -CSD -e "$CHUNK_PL")
+n=${#CHUNKS[@]}
 
 speak_local() {
-  local installed v voice=""
+  local installed v voice=() rest="${CHUNKS[*]:$1}"
   installed=$'\n'$(say -v '?' 2>/dev/null)
   for v in "${SAY_VOICES[@]}"; do
     if [[ -n $v && $installed == *$'\n'"$v "* ]]; then
-      voice=$v
+      voice=(-v "$v")
       break
     fi
   done
-  if [[ -n $voice ]]; then
-    say -v "$voice" <<<"$text" &
-  else
-    say <<<"$text" &
-  fi
+  say "${voice[@]}" <<<"$rest" &
   wait $!
   exit 0
 }
 
-if [[ $cached != "$hash" || ! -s $MP3 ]]; then
-  key=$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null)
-  [[ -n $key ]] || speak_local
-  body="$CACHE_DIR/voice-$sid.json"
-  jq -n --arg t "$text" --arg m "$MODEL_ID" \
-    '{text: $t, model_id: $m,
-      voice_settings: {stability: 0.6, similarity_boost: 0.75, style: 0, use_speaker_boost: true}}' >"$body"
+hash=$(printf '%s|%s|%s' "$VOICE_ID" "$MODEL_ID" "$text" | shasum -a 256)
+AUDIO_DIR="$CACHE_DIR/voice-$sid-${hash:0:16}"
+if [[ ! -d $AUDIO_DIR ]]; then
+  for old in "$CACHE_DIR/voice-$sid-"*; do
+    [[ -d $old ]] && rm -rf "$old"
+  done
+  mkdir -p "$AUDIO_DIR"
+fi
+rm -f "$AUDIO_DIR/failed"
+
+synthesize() {
+  local i=$1 prev="" next="" code body="$AUDIO_DIR/$1.json"
+  (( i > 0 )) && prev=${CHUNKS[i-1]}
+  (( i + 1 < n )) && next=${CHUNKS[i+1]}
+  jq -n --arg t "${CHUNKS[i]}" --arg m "$MODEL_ID" --arg p "$prev" --arg x "$next" \
+    '{text: $t, model_id: $m, previous_text: $p, next_text: $x,
+      voice_settings: {stability: 0.6, similarity_boost: 0.75, style: 0, use_speaker_boost: true}}
+     | with_entries(select(.value != ""))' >"$body"
   code=$(printf 'header = "xi-api-key: %s"\n' "$key" | curl -sS -K - \
     -X POST -H 'Content-Type: application/json' -H 'Accept: audio/mpeg' \
-    --data-binary @"$body" -o "$MP3.tmp" -w '%{http_code}' \
+    --data-binary @"$body" -o "$AUDIO_DIR/$i.tmp" -w '%{http_code}' \
     "https://api.elevenlabs.io/v1/text-to-speech/$VOICE_ID?output_format=mp3_44100_128")
-  unset key
   rm -f "$body"
-  if [[ $code != 200 ]]; then
-    rm -f "$MP3.tmp"
-    notify "ElevenLabs a répondu $code, voix macOS"
-    speak_local
+  if [[ $code == 200 ]]; then
+    mv -f "$AUDIO_DIR/$i.tmp" "$AUDIO_DIR/$i.mp3"
+  else
+    rm -f "$AUDIO_DIR/$i.tmp"
+    printf '%s\n' "$code" >"$AUDIO_DIR/failed"
+    return 1
   fi
-  mv -f "$MP3.tmp" "$MP3"
-  printf '%s\n' "$hash" >"$MP3.sha"
-fi
+}
 
-afplay "$MP3" &
-wait $!
+generate() {
+  local i
+  for (( i = 0; i < n; i++ )); do
+    [[ -s $AUDIO_DIR/$i.mp3 ]] && continue
+    synthesize "$i" || return
+  done
+}
+
+gen_pid=""
+for (( i = 0; i < n; i++ )); do
+  if [[ ! -s $AUDIO_DIR/$i.mp3 ]]; then
+    key=$(security find-generic-password -s "$KEYCHAIN_SERVICE" -w 2>/dev/null)
+    [[ -n $key ]] || speak_local 0
+    generate &
+    gen_pid=$!
+    unset key
+    break
+  fi
+done
+
+for (( i = 0; i < n; i++ )); do
+  while [[ ! -s $AUDIO_DIR/$i.mp3 ]]; do
+    if [[ -e $AUDIO_DIR/failed || -z $gen_pid ]] || ! kill -0 "$gen_pid" 2>/dev/null; then
+      [[ -s $AUDIO_DIR/$i.mp3 ]] && break
+      code=""
+      [[ -r $AUDIO_DIR/failed ]] && read -r code <"$AUDIO_DIR/failed"
+      notify "ElevenLabs a répondu ${code:-rien}, voix macOS"
+      speak_local "$i"
+    fi
+    sleep 0.1
+  done
+  afplay "$AUDIO_DIR/$i.mp3" &
+  wait $!
+done
