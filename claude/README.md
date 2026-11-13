@@ -6,6 +6,7 @@ Claude Code config, copied into `~/.claude/` by `sync-config`.
 | --------------- | ------------------------------------------------------------- |
 | `skills/`       | personal skills, mirrored to `~/.claude/skills/`              |
 | `statusline.sh` | status line, enable once with `statusLine` in `settings.json` |
+| `voice.sh`      | 🔊 in the status line: reads the last reply with ElevenLabs   |
 
 | Skill          | Does                                        |
 | -------------- | ------------------------------------------- |
