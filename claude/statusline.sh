@@ -223,7 +223,7 @@ if [[ $SID != default ]]; then
   # Rounded Nerd Font icon pills, in the blue of the auto mode badge, on
   # their own line so a narrow window never truncates them.
   BTN_FG="$E[38;2;122;162;247m" BTN_BG="$E[48;2;122;162;247m$E[38;2;26;27;38m"
-  for btn in back:󰑟 toggle:󰐎 skip:󰈑 replay:󰑙; do
+  for btn in prev: toggle:󰐎 next: replay:󰑙; do
     link "claude-voice://$SID/${btn%%:*}" \
       "${BTN_FG}${BTN_BG} ${btn#*:} ${RESET}${BTN_FG}"
     VOICE_LINE+="${VOICE_LINE:+ }${LINK}${RESET}"
