@@ -22,6 +22,7 @@ CACHE_DIR="${TMPDIR:-/tmp}/claude-statusline"
 SESSION="$CACHE_DIR/session-$sid"
 PID_FILE="$CACHE_DIR/voice.pid"
 PAUSED_FILE="$CACHE_DIR/voice.paused"
+PLAYER_JS="${BASH_SOURCE%/*}/voice-player.js"
 action=${2:-play}
 
 notify() {
@@ -37,19 +38,18 @@ if [[ -r $PID_FILE ]]; then
 fi
 [[ -n $player ]] || rm -f "$PAUSED_FILE"
 
-signal_player() {
-  pkill "-$1" -P "$player" 2>/dev/null
-  kill "-$1" "$player" 2>/dev/null
-}
-
+# The player polls this file, so pausing never freezes the audio mid-buffer.
 toggle_pause() {
   if [[ -e $PAUSED_FILE ]]; then
-    signal_player CONT
     rm -f "$PAUSED_FILE"
   else
-    signal_player STOP
     : >"$PAUSED_FILE"
   fi
+}
+
+play_file() {
+  osascript -l JavaScript "$PLAYER_JS" "$1" "$PAUSED_FILE" >/dev/null 2>&1 &
+  wait $!
 }
 
 case $action in
@@ -161,7 +161,7 @@ done < <(printf '%s' "$text" | perl -CSD -e "$CHUNK_PL")
 n=${#CHUNKS[@]}
 
 speak_local() {
-  local installed v voice=() rest="${CHUNKS[*]:$1}"
+  local installed v i voice=()
   installed=$'\n'$(say -v '?' 2>/dev/null)
   for v in "${SAY_VOICES[@]}"; do
     if [[ -n $v && $installed == *$'\n'"$v "* ]]; then
@@ -169,8 +169,9 @@ speak_local() {
       break
     fi
   done
-  say "${voice[@]}" <<<"$rest" &
-  wait $!
+  for (( i = $1; i < n; i++ )); do
+    say "${voice[@]}" -o "$AUDIO_DIR/say-$i.aiff" <<<"${CHUNKS[i]}" && play_file "$AUDIO_DIR/say-$i.aiff"
+  done
   exit 0
 }
 
@@ -237,6 +238,5 @@ for (( i = 0; i < n; i++ )); do
     fi
     sleep 0.1
   done
-  afplay "$AUDIO_DIR/$i.mp3" &
-  wait $!
+  play_file "$AUDIO_DIR/$i.mp3"
 done
