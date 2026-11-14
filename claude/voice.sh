@@ -2,7 +2,7 @@
 # ─── CLAUDE CODE VOICE ──────────────────────────────────────
 # Reads the last Claude reply aloud with ElevenLabs, or the macOS say
 # voice when there is no key or the API fails. Driven by the statusline
-# buttons (WezTerm): play or resume, pause or resume, skip ahead, replay.
+# buttons (WezTerm): play or pause, back and ahead 15 s, replay.
 # The API key lives in the macOS Keychain, never in this repo.
 
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:$PATH"
@@ -48,18 +48,29 @@ toggle_pause() {
   fi
 }
 
+# Exit status 3: the user rewound past the start, play the previous chunk.
 play_file() {
-  osascript -l JavaScript "$PLAYER_JS" "$1" "$PAUSED_FILE" "$SEEK_FILE" >/dev/null 2>&1 &
+  osascript -l JavaScript "$PLAYER_JS" "$1" "$PAUSED_FILE" "$SEEK_FILE" "$2" >/dev/null 2>&1 &
   wait $!
 }
 
 case $action in
+  toggle)
+    if [[ -n $player ]]; then
+      toggle_pause
+      exit 0
+    fi
+    ;;
   pause)
     [[ -n $player ]] && toggle_pause
     exit 0
     ;;
   skip)
     [[ -n $player ]] && echo "$SKIP_SECONDS" >>"$SEEK_FILE"
+    exit 0
+    ;;
+  back)
+    [[ -n $player ]] && echo "-$SKIP_SECONDS" >>"$SEEK_FILE"
     exit 0
     ;;
   play)
@@ -171,7 +182,11 @@ speak_local() {
     fi
   done
   for (( i = $1; i < n; i++ )); do
-    say "${voice[@]}" -o "$AUDIO_DIR/say-$i.aiff" <<<"${CHUNKS[i]}" && play_file "$AUDIO_DIR/say-$i.aiff"
+    echo "$i" >"$AUDIO_DIR/playing"
+    [[ -s $AUDIO_DIR/say-$i.aiff ]] \
+      || say "${voice[@]}" -o "$AUDIO_DIR/say-$i.aiff" <<<"${CHUNKS[i]}" || continue
+    play_file "$AUDIO_DIR/say-$i.aiff" $(( i > 0 ))
+    (( $? == 3 )) && i=$(( i - 2 ))
   done
   exit 0
 }
@@ -245,5 +260,6 @@ for (( i = 0; i < n; i++ )); do
     fi
     sleep 0.1
   done
-  play_file "$AUDIO_DIR/$i.mp3"
+  play_file "$AUDIO_DIR/$i.mp3" $(( i > 0 ))
+  (( $? == 3 )) && i=$(( i - 2 ))
 done
