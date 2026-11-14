@@ -220,8 +220,8 @@ if [[ $SID != default ]]; then
   fi
   SEGS+=("$seg")
 
-  link "claude-voice://$SID" "🔊"
-  SEGS+=("$LINK")
+  link "claude-voice://$SID" " 🔊 Écouter "
+  SEGS+=("$E[48;2;177;121;252m$E[30m${BOLD}${LINK}${RESET}")
 fi
 
 out=""
