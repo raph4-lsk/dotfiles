@@ -220,8 +220,12 @@ if [[ $SID != default ]]; then
   fi
   SEGS+=("$seg")
 
-  link "claude-voice://$SID" " 🔊 Écouter "
-  SEGS+=("$E[48;2;177;121;252m$E[30m${BOLD}${LINK}${RESET}")
+  seg=""
+  for btn in "play:🔊 Écouter" "pause:⏸ Pause" "replay:↺ Rejouer"; do
+    link "claude-voice://$SID/${btn%%:*}" " ${btn#*:} "
+    seg+="${seg:+ }$E[48;2;177;121;252m$E[30m${BOLD}${LINK}${RESET}"
+  done
+  SEGS+=("$seg")
 fi
 
 out=""

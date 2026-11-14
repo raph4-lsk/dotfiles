@@ -95,9 +95,11 @@ local function agents_watch_pane(id)
 end
 
 wezterm.on('open-uri', function(_, pane, uri)
-  local voice_sid = uri:match('^claude%-voice://([%w_%-]+)')
+  local voice_sid, action = uri:match('^claude%-voice://([%w_%-]+)/?(%a*)')
   if voice_sid then
-    wezterm.background_child_process { wezterm.home_dir .. '/.claude/voice.sh', voice_sid }
+    wezterm.background_child_process {
+      wezterm.home_dir .. '/.claude/voice.sh', voice_sid, action ~= '' and action or 'play',
+    }
     return false
   end
 
