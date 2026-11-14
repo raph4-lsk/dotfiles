@@ -6,7 +6,7 @@ Claude Code config, copied into `~/.claude/` by `sync-config`.
 | --------------- | ------------------------------------------------------------- |
 | `skills/`       | personal skills, mirrored to `~/.claude/skills/`              |
 | `statusline.sh` | status line, enable once with `statusLine` in `settings.json` |
-| `voice.sh`      | Listen, Pause, Replay buttons: reads the last reply aloud     |
+| `voice.sh`      | second status line buttons: read aloud, pause, ±15 s, replay |
 | `voice-player.js` | audio player used by `voice.sh`, pauses without glitches    |
 
 | Skill          | Does                                        |

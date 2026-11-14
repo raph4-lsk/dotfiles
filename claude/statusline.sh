@@ -220,15 +220,14 @@ if [[ $SID != default ]]; then
   fi
   SEGS+=("$seg")
 
-  # Rounded pills (Nerd Font caps) in the blue of the auto mode badge.
+  # Rounded Nerd Font icon pills, in the blue of the auto mode badge, on
+  # their own line so a narrow window never truncates them.
   BTN_FG="$E[38;2;122;162;247m" BTN_BG="$E[48;2;122;162;247m$E[38;2;26;27;38m"
-  seg=""
-  for btn in play:Listen pause:Pause skip:+15s replay:Replay; do
+  for btn in back:󰑟 toggle:󰐎 skip:󰈑 replay:󰑙; do
     link "claude-voice://$SID/${btn%%:*}" \
-      "${BTN_FG}${BTN_BG}${BOLD}${btn#*:}${RESET}${BTN_FG}"
-    seg+="${seg:+ }${LINK}${RESET}"
+      "${BTN_FG}${BTN_BG} ${btn#*:} ${RESET}${BTN_FG}"
+    VOICE_LINE+="${VOICE_LINE:+ }${LINK}${RESET}"
   done
-  SEGS+=("$seg")
 fi
 
 out=""
@@ -237,3 +236,4 @@ for seg in "${SEGS[@]}"; do
   out+=$seg
 done
 printf '%s\n' "$out"
+[[ -n $VOICE_LINE ]] && printf '%s\n' "$VOICE_LINE"
