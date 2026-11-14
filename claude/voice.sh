@@ -2,7 +2,7 @@
 # ─── CLAUDE CODE VOICE ──────────────────────────────────────
 # Reads the last Claude reply aloud with ElevenLabs, or the macOS say
 # voice when there is no key or the API fails. Driven by the statusline
-# buttons (WezTerm): play or pause, back and ahead 15 s, replay.
+# buttons (WezTerm): play or pause, previous and next paragraph, replay.
 # The API key lives in the macOS Keychain, never in this repo.
 
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:$PATH"
@@ -11,7 +11,6 @@ umask 077
 
 VOICE_ID=${CLAUDE_VOICE_ID:-21m00Tcm4TlvDq8ikWAM}
 MODEL_ID=${CLAUDE_VOICE_MODEL:-eleven_multilingual_v2}
-SKIP_SECONDS=15
 KEYCHAIN_SERVICE=elevenlabs-api-key
 SAY_VOICES=("${CLAUDE_SAY_VOICE:-}" "Audrey (Premium)" "Audrey (Enhanced)" "Audrey"
   "Flo (French (France))" "Amélie")
@@ -22,7 +21,7 @@ CACHE_DIR="${TMPDIR:-/tmp}/claude-statusline"
 SESSION="$CACHE_DIR/session-$sid"
 PID_FILE="$CACHE_DIR/voice.pid"
 PAUSED_FILE="$CACHE_DIR/voice.paused"
-SEEK_FILE="$CACHE_DIR/voice.seek"
+COMMAND_FILE="$CACHE_DIR/voice.cmd"
 PLAYER_JS="${BASH_SOURCE%/*}/voice-player.js"
 action=${2:-play}
 
@@ -30,14 +29,14 @@ notify() {
   osascript -e "display notification \"$1\" with title \"Claude voice\"" >/dev/null 2>&1
 }
 
-player=""
+player="" player_sid=""
 if [[ -r $PID_FILE ]]; then
-  read -r old <"$PID_FILE"
+  read -r old old_sid <"$PID_FILE"
   if [[ $old =~ ^[0-9]+$ ]] && ps -p "$old" -o command= 2>/dev/null | grep -q voice.sh; then
-    player=$old
+    player=$old player_sid=$old_sid
   fi
 fi
-[[ -n $player ]] || rm -f "$PAUSED_FILE" "$SEEK_FILE"
+[[ -n $player ]] || rm -f "$PAUSED_FILE" "$COMMAND_FILE"
 
 # The player polls these files, so pausing never freezes the audio mid-buffer.
 toggle_pause() {
@@ -48,11 +47,70 @@ toggle_pause() {
   fi
 }
 
-# Exit status 3: the user rewound past the start, play the previous chunk.
 play_file() {
-  osascript -l JavaScript "$PLAYER_JS" "$1" "$PAUSED_FILE" "$SEEK_FILE" "$2" >/dev/null 2>&1 &
+  osascript -l JavaScript "$PLAYER_JS" "$1" "$PAUSED_FILE" "$COMMAND_FILE" "$2" >/dev/null 2>&1 &
   wait $!
 }
+
+# first: start of the reply, start: first chunk of a paragraph, inner: the
+# rest of a long paragraph. The player restarts first and start chunks in
+# place on "prev" after 3 s, otherwise it hands the move back to us.
+player_mode() {
+  if (( $1 == 0 )); then
+    echo first
+  elif [[ ${PARAS[$1]} != "${PARAS[$1 - 1]}" ]]; then
+    echo start
+  else
+    echo inner
+  fi
+}
+
+# Player exit 3 = previous paragraph, 4 = next paragraph. Sets i to the
+# chunk before the one to play, since the playback loops add 1.
+navigate() {
+  local j
+  case $1 in
+    3)
+      j=$i
+      [[ $(player_mode "$i") == start ]] && j=$(( i - 1 ))
+      while (( j > 0 )) && [[ ${PARAS[j - 1]} == "${PARAS[j]}" ]]; do
+        j=$(( j - 1 ))
+      done
+      i=$(( j - 1 ))
+      ;;
+    4)
+      j=$(( i + 1 ))
+      while (( j < n )) && [[ ${PARAS[j]} == "${PARAS[i]}" ]]; do
+        j=$(( j + 1 ))
+      done
+      i=$(( j - 1 ))
+      ;;
+  esac
+}
+
+stop_player() {
+  local children grandchildren c
+  children=$(pgrep -P "$player")
+  for c in $children; do
+    grandchildren+=" $(pgrep -P "$c")"
+  done
+  kill -KILL "$player" $children $grandchildren 2>/dev/null
+  rm -f "$PAUSED_FILE" "$COMMAND_FILE"
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 "$player" 2>/dev/null || break
+    sleep 0.1
+  done
+  player=""
+}
+
+# Another session is playing: starting this one stops it, the other
+# buttons leave it alone.
+if [[ -n $player && $player_sid != "$sid" ]]; then
+  case $action in
+    toggle | play | replay) stop_player ;;
+    *) exit 0 ;;
+  esac
+fi
 
 case $action in
   toggle)
@@ -65,12 +123,8 @@ case $action in
     [[ -n $player ]] && toggle_pause
     exit 0
     ;;
-  skip)
-    [[ -n $player ]] && echo "$SKIP_SECONDS" >>"$SEEK_FILE"
-    exit 0
-    ;;
-  back)
-    [[ -n $player ]] && echo "-$SKIP_SECONDS" >>"$SEEK_FILE"
+  next | prev)
+    [[ -n $player ]] && echo "$action" >>"$COMMAND_FILE"
     exit 0
     ;;
   play)
@@ -80,25 +134,17 @@ case $action in
     fi
     ;;
   replay)
-    if [[ -n $player ]]; then
-      children=$(pgrep -P "$player")
-      kill -KILL "$player" $children 2>/dev/null
-      rm -f "$PAUSED_FILE" "$SEEK_FILE"
-      for _ in 1 2 3 4 5 6 7 8 9 10; do
-        kill -0 "$player" 2>/dev/null || break
-        sleep 0.1
-      done
-    fi
+    [[ -n $player ]] && stop_player
     ;;
   *)
     exit 1
     ;;
 esac
 
-echo $$ >"$PID_FILE"
+echo "$$ $sid" >"$PID_FILE"
 trap 'pkill -P $$ 2>/dev/null
-      read -r owner <"$PID_FILE" 2>/dev/null
-      [[ $owner == "$$" ]] && rm -f "$PID_FILE" "$PAUSED_FILE" "$SEEK_FILE"' EXIT
+      read -r owner _ <"$PID_FILE" 2>/dev/null
+      [[ $owner == "$$" ]] && rm -f "$PID_FILE" "$PAUSED_FILE" "$COMMAND_FILE"' EXIT
 
 transcript=""
 [[ -r $SESSION ]] && IFS= read -r transcript <"$SESSION"
@@ -154,21 +200,42 @@ if [[ -z $text ]]; then
   exit 0
 fi
 
-# A short first chunk starts playback fast, the next ones are generated
-# while the previous one plays.
+# Chunks follow paragraphs, so next and previous move by paragraph. A long
+# paragraph becomes several chunks of whole sentences, a sentence too long
+# on its own is cut at a comma or a space. The very first chunk stays short
+# so playback starts fast; the next ones are generated while one plays.
+# Output: "<paragraph number>\t<chunk>\0" per chunk.
 CHUNK_PL='
-  use utf8; local $/; my $t = <STDIN>; my @out; my $cur = "";
-  for my $s (split /(?<=[.!?:;])\s+/, $t) {
-    my $max = @out ? 800 : 200;
-    if ($cur ne "" && length($cur) + length($s) + 1 > $max) { push @out, $cur; $cur = $s; }
-    else { $cur = $cur eq "" ? $s : "$cur $s"; }
+  use utf8; local $/; my $t = <STDIN>; my @out; my $p = 0;
+  for my $para (split /\n\s*\n/, $t) {
+    next unless $para =~ /\S/;
+    my @parts;
+    for my $s (split /(?<=[.!?:;])\s+/, $para) {
+      while (length($s) > 800) {
+        my $cut = rindex($s, ", ", 800);
+        $cut = rindex($s, " ", 800) if $cut < 200;
+        $cut = 800 if $cut < 200;
+        push @parts, substr($s, 0, $cut + 1);
+        $s = substr($s, $cut + 1);
+        $s =~ s/^\s+//;
+      }
+      push @parts, $s if $s =~ /\S/;
+    }
+    my $cur = "";
+    for my $s (@parts) {
+      my $max = @out ? 800 : 200;
+      if ($cur ne "" && length($cur) + length($s) + 1 > $max) { push @out, "$p\t$cur"; $cur = $s; }
+      else { $cur = $cur eq "" ? $s : "$cur $s"; }
+    }
+    push @out, "$p\t$cur" if $cur =~ /\S/;
+    $p++;
   }
-  push @out, $cur if $cur ne "";
   print join("\0", @out), "\0";'
 
-CHUNKS=()
+CHUNKS=() PARAS=()
 while IFS= read -r -d '' c; do
-  CHUNKS+=("$c")
+  PARAS+=("${c%%$'\t'*}")
+  CHUNKS+=("${c#*$'\t'}")
 done < <(printf '%s' "$text" | perl -CSD -e "$CHUNK_PL")
 n=${#CHUNKS[@]}
 
@@ -185,8 +252,8 @@ speak_local() {
     echo "$i" >"$AUDIO_DIR/playing"
     [[ -s $AUDIO_DIR/say-$i.aiff ]] \
       || say "${voice[@]}" -o "$AUDIO_DIR/say-$i.aiff" <<<"${CHUNKS[i]}" || continue
-    play_file "$AUDIO_DIR/say-$i.aiff" $(( i > 0 ))
-    (( $? == 3 )) && i=$(( i - 2 ))
+    play_file "$AUDIO_DIR/say-$i.aiff" "$(player_mode "$i")"
+    navigate $?
   done
   exit 0
 }
@@ -223,15 +290,24 @@ synthesize() {
   fi
 }
 
-# Stays one chunk ahead of playback: skipped or unheard text costs no credits.
+# Generates only the chunk playing and the next one: skipped or unheard
+# text costs no credits. Runs until playback ends and kills it.
 generate() {
-  local i playing
-  for (( i = 0; i < n; i++ )); do
-    [[ -s $AUDIO_DIR/$i.mp3 ]] && continue
-    while read -r playing <"$AUDIO_DIR/playing" 2>/dev/null && (( i > playing + 1 )); do
-      sleep 0.2
+  local playing k todo
+  while :; do
+    read -r playing <"$AUDIO_DIR/playing" 2>/dev/null || playing=0
+    todo=""
+    for k in "$playing" $(( playing + 1 )); do
+      if (( k < n )) && [[ ! -s $AUDIO_DIR/$k.mp3 ]]; then
+        todo=$k
+        break
+      fi
     done
-    synthesize "$i" || return
+    if [[ -n $todo ]]; then
+      synthesize "$todo" || return
+    else
+      sleep 0.2
+    fi
   done
 }
 
@@ -260,6 +336,6 @@ for (( i = 0; i < n; i++ )); do
     fi
     sleep 0.1
   done
-  play_file "$AUDIO_DIR/$i.mp3" $(( i > 0 ))
-  (( $? == 3 )) && i=$(( i - 2 ))
+  play_file "$AUDIO_DIR/$i.mp3" "$(player_mode "$i")"
+  navigate $?
 done
