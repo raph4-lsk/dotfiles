@@ -150,6 +150,9 @@ cp "$CONFIG_DIR/claude/agents-watch.sh" \
 cp "$CONFIG_DIR/claude/voice.sh" \
    "$CLAUDE_DIR/voice.sh"
 
+cp "$CONFIG_DIR/claude/voice-player.js" \
+   "$CLAUDE_DIR/voice-player.js"
+
 chmod +x "$CLAUDE_DIR/statusline.sh" "$CLAUDE_DIR/subagent-statusline.sh" \
    "$CLAUDE_DIR/agents-watch.sh" "$CLAUDE_DIR/voice.sh"
 

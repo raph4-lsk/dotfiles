@@ -2,7 +2,7 @@
 # ─── CLAUDE CODE VOICE ──────────────────────────────────────
 # Reads the last Claude reply aloud with ElevenLabs, or the macOS say
 # voice when there is no key or the API fails. Driven by the statusline
-# buttons (WezTerm): play or resume, pause or resume, replay from the start.
+# buttons (WezTerm): play or resume, pause or resume, skip ahead, replay.
 # The API key lives in the macOS Keychain, never in this repo.
 
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:$PATH"
@@ -11,7 +11,7 @@ umask 077
 
 VOICE_ID=${CLAUDE_VOICE_ID:-21m00Tcm4TlvDq8ikWAM}
 MODEL_ID=${CLAUDE_VOICE_MODEL:-eleven_multilingual_v2}
-MAX_CHARS=${CLAUDE_VOICE_MAX:-4000}
+SKIP_SECONDS=15
 KEYCHAIN_SERVICE=elevenlabs-api-key
 SAY_VOICES=("${CLAUDE_SAY_VOICE:-}" "Audrey (Premium)" "Audrey (Enhanced)" "Audrey"
   "Flo (French (France))" "Amélie")
@@ -22,6 +22,8 @@ CACHE_DIR="${TMPDIR:-/tmp}/claude-statusline"
 SESSION="$CACHE_DIR/session-$sid"
 PID_FILE="$CACHE_DIR/voice.pid"
 PAUSED_FILE="$CACHE_DIR/voice.paused"
+SEEK_FILE="$CACHE_DIR/voice.seek"
+PLAYER_JS="${BASH_SOURCE%/*}/voice-player.js"
 action=${2:-play}
 
 notify() {
@@ -35,26 +37,29 @@ if [[ -r $PID_FILE ]]; then
     player=$old
   fi
 fi
-[[ -n $player ]] || rm -f "$PAUSED_FILE"
+[[ -n $player ]] || rm -f "$PAUSED_FILE" "$SEEK_FILE"
 
-signal_player() {
-  pkill "-$1" -P "$player" 2>/dev/null
-  kill "-$1" "$player" 2>/dev/null
-}
-
+# The player polls these files, so pausing never freezes the audio mid-buffer.
 toggle_pause() {
   if [[ -e $PAUSED_FILE ]]; then
-    signal_player CONT
     rm -f "$PAUSED_FILE"
   else
-    signal_player STOP
     : >"$PAUSED_FILE"
   fi
+}
+
+play_file() {
+  osascript -l JavaScript "$PLAYER_JS" "$1" "$PAUSED_FILE" "$SEEK_FILE" >/dev/null 2>&1 &
+  wait $!
 }
 
 case $action in
   pause)
     [[ -n $player ]] && toggle_pause
+    exit 0
+    ;;
+  skip)
+    [[ -n $player ]] && echo "$SKIP_SECONDS" >>"$SEEK_FILE"
     exit 0
     ;;
   play)
@@ -67,7 +72,7 @@ case $action in
     if [[ -n $player ]]; then
       children=$(pgrep -P "$player")
       kill -KILL "$player" $children 2>/dev/null
-      rm -f "$PAUSED_FILE"
+      rm -f "$PAUSED_FILE" "$SEEK_FILE"
       for _ in 1 2 3 4 5 6 7 8 9 10; do
         kill -0 "$player" 2>/dev/null || break
         sleep 0.1
@@ -82,7 +87,7 @@ esac
 echo $$ >"$PID_FILE"
 trap 'pkill -P $$ 2>/dev/null
       read -r owner <"$PID_FILE" 2>/dev/null
-      [[ $owner == "$$" ]] && rm -f "$PID_FILE" "$PAUSED_FILE"' EXIT
+      [[ $owner == "$$" ]] && rm -f "$PID_FILE" "$PAUSED_FILE" "$SEEK_FILE"' EXIT
 
 transcript=""
 [[ -r $SESSION ]] && IFS= read -r transcript <"$SESSION"
@@ -137,10 +142,6 @@ if [[ -z $text ]]; then
   notify "Rien à lire"
   exit 0
 fi
-if (( ${#text} > MAX_CHARS )); then
-  text="${text:0:MAX_CHARS}"
-  text="${text%[.!?]*}. La suite est tronquée."
-fi
 
 # A short first chunk starts playback fast, the next ones are generated
 # while the previous one plays.
@@ -161,7 +162,7 @@ done < <(printf '%s' "$text" | perl -CSD -e "$CHUNK_PL")
 n=${#CHUNKS[@]}
 
 speak_local() {
-  local installed v voice=() rest="${CHUNKS[*]:$1}"
+  local installed v i voice=()
   installed=$'\n'$(say -v '?' 2>/dev/null)
   for v in "${SAY_VOICES[@]}"; do
     if [[ -n $v && $installed == *$'\n'"$v "* ]]; then
@@ -169,8 +170,9 @@ speak_local() {
       break
     fi
   done
-  say "${voice[@]}" <<<"$rest" &
-  wait $!
+  for (( i = $1; i < n; i++ )); do
+    say "${voice[@]}" -o "$AUDIO_DIR/say-$i.aiff" <<<"${CHUNKS[i]}" && play_file "$AUDIO_DIR/say-$i.aiff"
+  done
   exit 0
 }
 
@@ -206,14 +208,19 @@ synthesize() {
   fi
 }
 
+# Stays one chunk ahead of playback: skipped or unheard text costs no credits.
 generate() {
-  local i
+  local i playing
   for (( i = 0; i < n; i++ )); do
     [[ -s $AUDIO_DIR/$i.mp3 ]] && continue
+    while read -r playing <"$AUDIO_DIR/playing" 2>/dev/null && (( i > playing + 1 )); do
+      sleep 0.2
+    done
     synthesize "$i" || return
   done
 }
 
+echo 0 >"$AUDIO_DIR/playing"
 gen_pid=""
 for (( i = 0; i < n; i++ )); do
   if [[ ! -s $AUDIO_DIR/$i.mp3 ]]; then
@@ -227,6 +234,7 @@ for (( i = 0; i < n; i++ )); do
 done
 
 for (( i = 0; i < n; i++ )); do
+  echo "$i" >"$AUDIO_DIR/playing"
   while [[ ! -s $AUDIO_DIR/$i.mp3 ]]; do
     if [[ -e $AUDIO_DIR/failed || -z $gen_pid ]] || ! kill -0 "$gen_pid" 2>/dev/null; then
       [[ -s $AUDIO_DIR/$i.mp3 ]] && break
@@ -237,6 +245,5 @@ for (( i = 0; i < n; i++ )); do
     fi
     sleep 0.1
   done
-  afplay "$AUDIO_DIR/$i.mp3" &
-  wait $!
+  play_file "$AUDIO_DIR/$i.mp3"
 done

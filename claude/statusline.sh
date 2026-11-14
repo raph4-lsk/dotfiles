@@ -220,10 +220,13 @@ if [[ $SID != default ]]; then
   fi
   SEGS+=("$seg")
 
+  # Rounded pills (Nerd Font caps) in the blue of the auto mode badge.
+  BTN_FG="$E[38;2;122;162;247m" BTN_BG="$E[48;2;122;162;247m$E[38;2;26;27;38m"
   seg=""
-  for btn in "play:🔊 Écouter" "pause:⏸ Pause" "replay:↺ Rejouer"; do
-    link "claude-voice://$SID/${btn%%:*}" " ${btn#*:} "
-    seg+="${seg:+ }$E[48;2;177;121;252m$E[30m${BOLD}${LINK}${RESET}"
+  for btn in play:Listen pause:Pause skip:+15s replay:Replay; do
+    link "claude-voice://$SID/${btn%%:*}" \
+      "${BTN_FG}${BTN_BG}${BOLD}${btn#*:}${RESET}${BTN_FG}"
+    seg+="${seg:+ }${LINK}${RESET}"
   done
   SEGS+=("$seg")
 fi
