@@ -1,8 +1,8 @@
 #!/bin/bash
 # ─── CLAUDE CODE VOICE ──────────────────────────────────────
 # Reads the last Claude reply aloud with ElevenLabs, or the macOS say
-# voice when there is no key or the API fails. Opened by clicking 🔊 in
-# the statusline (WezTerm); a click during playback stops it.
+# voice when there is no key or the API fails. Driven by the statusline
+# buttons (WezTerm): play or resume, pause or resume, replay from the start.
 # The API key lives in the macOS Keychain, never in this repo.
 
 export PATH="/opt/homebrew/bin:/usr/bin:/bin:$PATH"
@@ -21,22 +21,68 @@ sid=${sid:-default}
 CACHE_DIR="${TMPDIR:-/tmp}/claude-statusline"
 SESSION="$CACHE_DIR/session-$sid"
 PID_FILE="$CACHE_DIR/voice.pid"
+PAUSED_FILE="$CACHE_DIR/voice.paused"
+action=${2:-play}
 
 notify() {
   osascript -e "display notification \"$1\" with title \"Claude voice\"" >/dev/null 2>&1
 }
 
+player=""
 if [[ -r $PID_FILE ]]; then
   read -r old <"$PID_FILE"
   if [[ $old =~ ^[0-9]+$ ]] && ps -p "$old" -o command= 2>/dev/null | grep -q voice.sh; then
-    pkill -P "$old" 2>/dev/null
-    kill "$old" 2>/dev/null
-    rm -f "$PID_FILE"
-    exit 0
+    player=$old
   fi
 fi
+[[ -n $player ]] || rm -f "$PAUSED_FILE"
+
+signal_player() {
+  pkill "-$1" -P "$player" 2>/dev/null
+  kill "-$1" "$player" 2>/dev/null
+}
+
+toggle_pause() {
+  if [[ -e $PAUSED_FILE ]]; then
+    signal_player CONT
+    rm -f "$PAUSED_FILE"
+  else
+    signal_player STOP
+    : >"$PAUSED_FILE"
+  fi
+}
+
+case $action in
+  pause)
+    [[ -n $player ]] && toggle_pause
+    exit 0
+    ;;
+  play)
+    if [[ -n $player ]]; then
+      [[ -e $PAUSED_FILE ]] && toggle_pause
+      exit 0
+    fi
+    ;;
+  replay)
+    if [[ -n $player ]]; then
+      children=$(pgrep -P "$player")
+      kill -KILL "$player" $children 2>/dev/null
+      rm -f "$PAUSED_FILE"
+      for _ in 1 2 3 4 5 6 7 8 9 10; do
+        kill -0 "$player" 2>/dev/null || break
+        sleep 0.1
+      done
+    fi
+    ;;
+  *)
+    exit 1
+    ;;
+esac
+
 echo $$ >"$PID_FILE"
-trap 'pkill -P $$ 2>/dev/null; rm -f "$PID_FILE"' EXIT
+trap 'pkill -P $$ 2>/dev/null
+      read -r owner <"$PID_FILE" 2>/dev/null
+      [[ $owner == "$$" ]] && rm -f "$PID_FILE" "$PAUSED_FILE"' EXIT
 
 transcript=""
 [[ -r $SESSION ]] && IFS= read -r transcript <"$SESSION"
