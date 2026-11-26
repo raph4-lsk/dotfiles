@@ -6,6 +6,7 @@
     ../modules/python.nix
     ../modules/skhd.nix
     ../modules/opencode.nix
+    ../modules/finicky.nix
   ];
 
   home.username = "arn";
